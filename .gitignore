@@ -1,12 +1,23 @@
-venv/
+# Ignorar a planilha de chaves de acesso
+Chaves_de_Acesso.xlsx
+
+# Ignorar XMLs baixados
+XML/
+*.xml
+*.crdownload
+
+# Ignorar arquivos temporários do Python
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
-*.zip
-*.xlsx
+
+# Ignorar ambientes virtuais
+venv/
+.venv/
+
+# Ignorar configurações do sistema operacional / IDE
 .DS_Store
-.env
-.xlsx
-.csv
-chormedriver-win64/
+*.swp
+*.swo
+.vscode/
+.idea/

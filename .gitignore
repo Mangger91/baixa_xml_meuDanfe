@@ -9,3 +9,4 @@ __pycache__/
 .env
 .xlsx
 .csv
+chormedriver-win64/

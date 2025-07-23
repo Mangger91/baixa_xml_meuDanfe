@@ -1,121 +1,138 @@
-import chromedriver_autoinstaller
 from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+import logging
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 import openpyxl
-import time
 import os
+import time
 
-# Caminhos
-caminho_excel = r'C:\Robo - Baixas de XML\Outputs\CHAVE DE ACESSO.xlsx'
-pasta_destino = r'C:\Robo - Baixas de XML\Outputs'
+# === CONFIGURAÇÕES ===
 
-# Instalar a versão específica do ChromeDriver compatível com a versão do Chrome
-chrome_version = '127.0.6533.120'  # Versão do Chrome que você tem
-chromedriver_autoinstaller.install(True)  # Força a instalação do ChromeDriver para a versão do Chrome
+CAMINHO_EXCEL = r'C:\Scripts_e_Automacoes\MeuDanfe_NFe\Chaves_de_Acesso.xlsx'
+PASTA_DESTINO = r'C:\Scripts_e_Automacoes\MeuDanfe_NFe\XML'
+URL_SITE = 'https://meudanfe.com.br'
+CHROME_PROFILE_PATH = r'C:\Users\mangger\AppData\Local\Google\Chrome\User Data\Profile 1'
+TEMPO_TIMEOUT = 120  # segundos
 
-# Configurações do Chrome WebDriver
-chrome_options = Options()
-chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-gpu")
-chrome_options.add_argument("--start-maximized")
-chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-chrome_options.add_experimental_option('useAutomationExtension', False)
 
-# Desabilitar avisos de download inseguro
-prefs = {
-    "safebrowsing.enabled": True,  # Desativa os avisos de navegação segura
-    "download.default_directory": pasta_destino,  # Define o local de download padrão
-    "download.prompt_for_download": False,  # Baixa sem perguntar onde salvar
-    "download.directory_upgrade": True,
-    "safebrowsing.disable_download_protection": True  # Desabilita proteção de download
-}
-chrome_options.add_experimental_option("prefs", prefs)
+def configurar_chromedriver():
+    caminho_driver = r'C:\Scripts_e_Automacoes\MeuDanfe_NFe\chromedriver.exe'
+    service = Service(executable_path=caminho_driver, log_path=os.devnull) 
 
-# Adicionar o caminho para o perfil do Chrome
-chrome_profile_path = r'C:\Users\mangger\AppData\Local\Google\Chrome\User Data\Profile 1'  
-chrome_options.add_argument(f"user-data-dir={chrome_profile_path}")
+    options = Options()
+    options.add_argument("--log-level=3")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--start-maximized")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument(f"user-data-dir={CHROME_PROFILE_PATH}")
 
-# Inicializar WebDriver
-driver = webdriver.Chrome(options=chrome_options)
+    prefs = {
+        "safebrowsing.enabled": True,
+        "download.default_directory": PASTA_DESTINO,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.disable_download_protection": True
+    }
+    options.add_experimental_option("prefs", prefs)
 
-# Definir script para remover as variáveis do navegador que indicam automação
-driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    driver = webdriver.Chrome(options=options)
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    return driver
 
-# Carregar planilha
-wb = openpyxl.load_workbook(caminho_excel)
-sheet = wb.active
 
-# Abrir o site
-driver.get('https://meudanfe.com.br')
+def carregar_planilha():
+    wb = openpyxl.load_workbook(CAMINHO_EXCEL)
+    sheet = wb.active
+    return wb, sheet
 
-# Aguardar o site carregar
-wait = WebDriverWait(driver, 10)
 
-# Inicializar variáveis de controle
-paused = False
-running = True
-
-# Etapa 1: Realizar o download de todas as chaves
-for row in sheet.iter_rows(min_row=2, max_row=sheet.max_row, min_col=1, max_col=3):
-    chave = row[0].value
-    empresa = row[1].value
-    status = row[2].value
-
-    if chave is None or status == 'SUCESSO':
-        continue
-
-    # Escrever a chave no campo de busca
-    search_box = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="get-danfe"]/div/div/div[1]/div/div/div/input')))
-    search_box.clear()
-    search_box.send_keys(chave)
-
-    # Clicar no botão de busca
-    search_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="get-danfe"]/div/div/div[1]/div/div/div/button')))
-    search_button.click()
-    time.sleep(5)
-
-    # Verificar se a página de download foi carregada
+def baixar_xml(driver, wait, chave, row):
     try:
-        wait.until(EC.url_contains("https://meudanfe.com.br/ver-danfe"))
+        print(f"🔎 Buscando chave: {chave}")
+        search_box = wait.until(EC.element_to_be_clickable((By.ID, 'searchTxt')))
+        search_box.clear()
+        search_box.send_keys(chave)
+
+        search_button = wait.until(EC.element_to_be_clickable((By.ID, 'searchBtn')))
+        search_button.click()
+
+        # Aguardar sté 60s para a página de resultado carregar
+        try:
+            esperar_carregamento_terminar(driver)
+            wait.until(EC.presence_of_all_elements_located((By.ID, 'downloadXmlBtn'))) 
+        except:
+            print("❌ Página de resultado não carregou. Reiniciando...")    
+            row[2].value = "ERRO"
+            forcar_reinicio_site(driver)
+            return  
+
+        # Tenta clicar no botão de download
+        esperar_carregamento_terminar(driver)
+        download_button = wait.until(EC.element_to_be_clickable((By.ID, 'downloadXmlBtn')))
+        download_button.click()
+        time.sleep(5)  # Tempo para download iniciar
+
+        # Verifica se o XML foi baixado
+        caminho_arquivo = os.path.join(PASTA_DESTINO, f"{chave}.xml")
+        status = "SUCESSO" if os.path.exists(caminho_arquivo) else "FALTANDO"
+        print(f"📥 Resultado: {status}")
+        row[2].value = status
+
     except Exception as e:
-        print(f"Erro ao tentar carregar a página de download para a chave {chave}: {e}")
-        status_cell = sheet.cell(row=row[0].row, column=3)
-        status_cell.value = 'ERRO'
-        continue  # Pula para a próxima chave
-    
-    # Clicar na opção de download XML
+        print(f"❌ Erro ao processar a chave {chave}: {e}")
+        row[2].value = "ERRO"
+
+    finally:
+        # Garante que voltou para a tela inicial
+        try:
+            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "searchTxt")))
+        except:
+            print("↩️ Página travada. Redirecionando manualmente.")
+            driver.get(URL_SITE)
+            time.sleep(5)
+
+
+def esperar_carregamento_terminar(driver, timeout=30):
     try:
-        download_xml_button = wait.until(EC.element_to_be_clickable((By.XPATH, '/html/body/div[1]/div/div[1]/div/div[2]/button[1]')))
-        download_xml_button.click()
-    except Exception as e:
-        print(f"Erro ao tentar clicar no botão de download XML: {e}")
+        WebDriverWait(driver, timeout).until_not(
+            EC.presence_of_element_located((By.CLASS_NAME, "jloading"))
+        )
+    except:
+        print("⚠️ Timeout esperando o carregamento da página terminar.")
+
+def forcar_reinicio_site(driver):
+    print("🔁 Recarregando o site manualmente... ")
+    driver.get(URL_SITE)
     time.sleep(5)
-    
-    # Clicar no botão de nova consulta
-    nova_consulta = wait.until(EC.element_to_be_clickable((By.XPATH, '/html/body/div[1]/div/div[1]/div/div[1]/button')))
-    nova_consulta.click()
-    time.sleep(5)
+    esperar_carregamento_terminar(driver)
 
-    # Verificar se o download foi concluído e atualizar a planilha
-    arquivo_baixado = os.path.join(pasta_destino, f'{chave}.xml')
 
-    status_cell = sheet.cell(row=row[0].row, column=3)
-    if os.path.exists(arquivo_baixado):
-        status_cell.value = 'SUCESSO'
-    else:
-        status_cell.value = 'FALTANDO'
+def main():
+    driver = configurar_chromedriver()
+    wait = WebDriverWait(driver, TEMPO_TIMEOUT)
+    driver.get(URL_SITE)
+    time.sleep(3)
+    wb, sheet = carregar_planilha()
 
-    wb.save(caminho_excel)
+    for row in sheet.iter_rows(min_row=2, max_row=sheet.max_row, min_col=1, max_col=3):
+        chave = row[0].value
+        status = row[2].value
 
-# Encerrar WebDriver
-driver.quit()
+        if chave and (status is None or status == ""):
+            baixar_xml(driver, wait, chave, row)
 
-wb.close()
+    wb.save(CAMINHO_EXCEL)
+    wb.close()
+    driver.quit()
+    print("✅ Processo concluído com sucesso.")
 
-print("Verificação concluída, automação encerrada.")
+
+if __name__ == "__main__":
+    main()

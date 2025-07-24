@@ -2,28 +2,38 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.keys import Keys
 import openpyxl
 import os
 import time
+from datetime import datetime
 
 # === CONFIGURAÇÕES ===
-
 CAMINHO_EXCEL = r'C:\Scripts_e_Automacoes\MeuDanfe_NFe\Chaves_de_Acesso.xlsx'
 PASTA_DESTINO = r'C:\Scripts_e_Automacoes\MeuDanfe_NFe\XML'
+PASTA_LOGS = r'C:\Scripts_e_Automacoes\MeuDanfe_NFe\Logs'
 URL_SITE = 'https://meudanfe.com.br'
 TEMPO_TIMEOUT = 120  # segundos
 
+# === LOG ===
+def criar_arquivo_log():
+    if not os.path.exists(PASTA_LOGS):
+        os.makedirs(PASTA_LOGS)
+    nome_arquivo = datetime.now().strftime("log_%d-%m-%Y_%H-%M.txt")
+    caminho_log = os.path.join(PASTA_LOGS, nome_arquivo)
+    return open(caminho_log, "w", encoding="utf-8")
+
+def escrever_log(log_file, mensagem):
+    agora = datetime.now().strftime("%H:%M:%S")
+    log_file.write(f"[{agora}] {mensagem}\n")
+    print(f"[{agora}] {mensagem}")
+
+# === BROWSER ===
 def configurar_chromedriver():
     options = uc.ChromeOptions()
     options.add_argument("--start-maximized")
     options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--disable-accelerated-2d-canvas")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    
     prefs = {
         "safebrowsing.enabled": True,
         "download.default_directory": PASTA_DESTINO,
@@ -31,100 +41,120 @@ def configurar_chromedriver():
         "download.directory_upgrade": True
     }
     options.add_experimental_option("prefs", prefs)
+    return uc.Chrome(options=options, use_subprocess=True)
 
-    driver = uc.Chrome(options=options, use_subprocess=True)
-    return driver
-
+# === PLANILHA ===
 def carregar_planilha():
     wb = openpyxl.load_workbook(CAMINHO_EXCEL)
     sheet = wb.active
     return wb, sheet
 
-def esperar_carregamento_terminar(driver, timeout=30):
+# === DOWNLOAD XML ===
+def baixar_xml(driver, wait, chave, row, log_file):
     try:
-        WebDriverWait(driver, timeout).until_not(
-            EC.presence_of_element_located((By.CLASS_NAME, "jloading"))
-        )
-    except:
-        print("⚠️ Timeout esperando o carregamento da página terminar.")
+        escrever_log(log_file, f"🔎 Buscando chave: {chave}")
 
-def baixar_xml(driver, wait, chave, row):
-    try:
-        print(f"🔎 Buscando chave: {chave}")
+        if row[1].value and row[1].value.strip() != "":
+            escrever_log(log_file, f"⏭️  Chave {chave} já possui status: {row[1].value}. Pulando.")
+            return driver, wait
+
+        nome_arquivo_esperado = os.path.join(PASTA_DESTINO, f"{chave}.xml")
+        nome_com_prefixo = os.path.join(PASTA_DESTINO, f"NFE-{chave}.xml")
+        if os.path.exists(nome_arquivo_esperado) or os.path.exists(nome_com_prefixo):
+            escrever_log(log_file, f"⏩ XML já existe localmente para a chave {chave}.")
+            row[1].value = "SUCESSO"
+            return driver, wait
+
+        arquivos_antes = set(os.listdir(PASTA_DESTINO))
+
+        # Preenche e clica em BUSCAR
         search_box = wait.until(EC.element_to_be_clickable((By.ID, 'searchTxt')))
         search_box.clear()
-
-        # Preenche a chave e envia com ENTER (alguns sites escutam esse evento)
         driver.execute_script(f"document.getElementById('searchTxt').value = '{chave}';")
-        search_button = driver.find_element(By.ID, 'searchBtn')
-        driver.execute_script("arguments[0].click();", search_button)
-
-        # Espera inicial + aguarda botão de download aparecer
+        driver.find_element(By.ID, 'searchBtn').click()
         time.sleep(2)
-        WebDriverWait(driver, 30).until(
-            EC.element_to_be_clickable((By.ID, 'downloadXmlBtn'))
-        )
 
-        # Clica no botão de download
-        download_button = wait.until(EC.element_to_be_clickable((By.ID, 'downloadXmlBtn')))
-        download_button.click()
-        time.sleep(5)  # Tempo para download iniciar
+        # Espera até 3 minutos
+        timeout_inicio = time.time()
+        while time.time() - timeout_inicio < 180:
+            arquivos_depois = set(os.listdir(PASTA_DESTINO))
+            novos = arquivos_depois - arquivos_antes
+            if novos:
+                novo_arquivo = novos.pop()
+                caminho_origem = os.path.join(PASTA_DESTINO, novo_arquivo)
+                caminho_destino = os.path.join(PASTA_DESTINO, f"{chave}.xml")
 
-        # Aguardar o download concluir
-        caminho_final = os.path.join(PASTA_DESTINO, f"{chave}.xml")
-        caminho_tempo = caminho_final + ".crdownload"
-        tempo_maximo = 60  # Tempo máximo para esperar o download
-        tempo_decorrido = 0
-        
-        while os.path.exists(caminho_tempo) and tempo_decorrido < tempo_maximo:
-            time.sleep(1)
-            tempo_decorrido += 1
-        
-        # Após aguardar, checa se o arquivo foi baixado corretamente
-        if os.path.exists(caminho_final):
-            status = "SUCESSO"
-            print(f"✅ XML baixado com sucesso: {caminho_final}")
-        else:
-            status = "FALHA"
-            print(f"❌ Falha ao baixar o XML para a chave: {chave}")
-            
-        print(f"Status do download: {status}")
-        row[2].value = status
+                while novo_arquivo.endswith(".crdownload") or not os.path.exists(caminho_origem):
+                    time.sleep(1)
+                    arquivos_depois = set(os.listdir(PASTA_DESTINO))
+                    novos = arquivos_depois - arquivos_antes
+                    if novos:
+                        novo_arquivo = novos.pop()
+                        caminho_origem = os.path.join(PASTA_DESTINO, novo_arquivo)
+
+                os.rename(caminho_origem, caminho_destino)
+                row[1].value = "SUCESSO"
+                escrever_log(log_file, f"✅ XML baixado automaticamente: {chave}")
+                return driver, wait
+
+            # Tenta clicar no botão "Baixar XML"
+            try:
+                btn_baixar = driver.find_element(By.ID, 'downloadXmlBtn')
+                if btn_baixar.is_displayed() and btn_baixar.is_enabled():
+                    btn_baixar.click()
+                    escrever_log(log_file, f"⬇️ Clicou no botão 'Baixar XML'")
+                    time.sleep(2)
+            except:
+                pass
+
+            time.sleep(2)
+
+        # Timeout de 3 minutos
+        row[1].value = "FALHA"
+        escrever_log(log_file, f"❌ Timeout aguardando download da chave: {chave}. Reiniciando navegador.")
+
+        driver.quit()
+        driver = configurar_chromedriver()
+        driver.get(URL_SITE)
+        wait = WebDriverWait(driver, TEMPO_TIMEOUT)
+        time.sleep(2)
 
     except Exception as e:
-        print(f"❌ Erro ao processar a chave {chave}: {e}")
-        row[2].value = "ERRO"
-        return driver, wait
-
-    finally:
-        # Voltar para tela inicial se travar
-        try:
-            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "searchTxt")))
-        except:
-            print("↩️ Página travada. Redirecionando manualmente.")
-            driver.get(URL_SITE)
-            time.sleep(5)
+        escrever_log(log_file, f"❌ Erro ao processar chave {chave}: {e}")
+        row[1].value = "ERRO"
 
     return driver, wait
 
+# === MAIN ===
 def main():
+    if not os.path.exists(PASTA_DESTINO):
+        os.makedirs(PASTA_DESTINO)
+    log_file = criar_arquivo_log()
+
     driver = configurar_chromedriver()
     driver.get(URL_SITE)
     wait = WebDriverWait(driver, TEMPO_TIMEOUT)
     time.sleep(3)
+
     wb, sheet = carregar_planilha()
 
-    for row in sheet.iter_rows(min_row=2, max_row=sheet.max_row, min_col=1, max_col=3):
+    for row in sheet.iter_rows(min_row=2, max_row=sheet.max_row, min_col=1, max_col=2):
         chave = row[0].value
-        status = row[2].value
+        if chave:
+            driver, wait = baixar_xml(driver, wait, str(chave).strip(), row, log_file)
 
-        if chave and (status is None or status == ""):
-            driver, wait = baixar_xml(driver, wait, chave, row)
-
-    wb.save(CAMINHO_EXCEL)
-    wb.close()
-    driver.quit()
-    print("✅ Processo concluído com sucesso.")
+    try:
+        wb.save(CAMINHO_EXCEL)
+        escrever_log(log_file, "📄 Planilha atualizada com sucesso.")
+    except Exception as e:
+        escrever_log(log_file, f"⚠️ Erro ao salvar planilha: {e}")
+    finally:
+        wb.close()
+        try:
+            driver.quit()
+        except Exception as e:
+            escrever_log(log_file, f"⚠️ Erro ao fechar navegador: {e}")
+        log_file.close()
 
 if __name__ == "__main__":
     main()
